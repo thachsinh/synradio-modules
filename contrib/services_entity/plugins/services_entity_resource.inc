@@ -235,7 +235,14 @@ class ServicesEntityResourceController implements ServicesResourceControllerInte
       // If the property is defined in the schema, use the schema property.
       // The EFQ method is either 'propertyCondition' or 'OrderByCondition'.
       $operation = 'property' . $operation;
-      $query->$operation($property, $value);
+
+      if ($operation === 'propertyCondition' && is_array($value) && isset($value['operation']) && isset($value['value'])) {
+          $query->propertyCondition($property, $value['value'], $value['operation']);
+      }
+      else {
+          $query->$operation($property, $value);
+      }
+
       return;
     }
 
