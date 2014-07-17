@@ -1,0 +1,183 @@
+<?php
+/**
+ * Implements hook_menu
+ */
+function syn_aduro_sync_menu() {
+  $items['admin/config/system/sync-app'] = array(
+    'title' => 'Sync App config',
+    'description' => 'Sync App config',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('syn_aduro_sync_app_setting'),
+    'access arguments' => array('administer'),
+    'type' => MENU_NORMAL_ITEM,
+  );
+  
+  return $items;  
+}
+
+/**
+ * Sync App config form
+ */
+function syn_aduro_sync_app_setting() {
+  $form = array();
+  
+  $form['syn_aduro_sync_app_config'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Sync App Information'),
+  );
+  $form['syn_aduro_sync_app_config']['sync_app_queue_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Sync App queue url'),
+    '#description' => t('Sync App queue url'),
+    '#default_value' => variable_get('sync_app_queue_url', '')
+  );
+  $form['syn_aduro_sync_app_config']['sync_app_mapping_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Sync App Mapping Id'),
+    '#description' => t('Sync App Mapping Id'),
+    '#default_value' => variable_get('sync_app_mapping_id', ''),
+    '#element_validate' => array('element_validate_integer')
+  );
+  
+  return system_settings_form($form);
+}
+
+/**
+ * Tracking course create
+ */
+function syn_aduro_sync_og_membership_insert(OgMembership $og_membership) {
+  if ($group = og_load($og_membership->gid)) {
+    if ($group->entity_type == 'course') {
+      if ($course = course_load($group->etid)) {
+        syn_aduro_sync_tracking($og_membership, $course, 'insert');
+      } 
+    }
+  }
+}
+
+/**
+ * Tracking course delete
+ */
+function syn_aduro_sync_og_membership_delete(OgMembership $og_membership) {
+  if ($group = og_load($og_membership->gid)) {
+    if ($group->entity_type == 'course') {
+      if ($course = course_load($group->etid)) {
+        syn_aduro_sync_tracking($og_membership, $course, 'delete');
+      } 
+    }
+  }
+}
+
+/**
+ * Tracking course update
+ */
+function syn_aduro_sync_og_membership_update(OgMembership $og_membership) {
+  if ($group = og_load($og_membership->gid)) {
+    if ($group->entity_type == 'course') {
+      if ($course = course_load($group->etid)) {
+        syn_aduro_sync_tracking($og_membership, $course, 'update');
+      } 
+    }
+  }
+}
+
+/**
+ * Sync course to salesforce
+ */
+function syn_aduro_sync_tracking($og_membership, $course, $type) {
+  $queue_url = variable_get('sync_app_queue_url', '');
+  $sync_mapping_id = variable_get('sync_app_mapping_id', '');
+  if (!empty($queue_url) && !empty($sync_mapping_id)) {
+    $data = array(
+      'Contact__c' => $og_membership->etid,
+      'Course_ID__c' => $og_membership->id,
+      'Course_Name__c' => $course->name,
+      'Course_Status__c' => syn_aduro_sync_course_completed($og_membership),
+      'Enrolled_Date__c' => syn_aduro_sync_course_enroldate($og_membership),
+      'Qualification_Code__c' => syn_aduro_sync_course_qualitification_code($course)
+    );
+    
+    switch ($type) {
+      case 'insert':
+        $data['action'] = 'create';
+        if (syn_aduro_sync_push($url, $data) != 'true') {
+          watchdog('syn_aduro_sync', 'insert error');
+        }
+        break;
+        
+      case 'update':
+        $data['action'] = 'update';
+        if (syn_aduro_sync_push($url, $data) != 'true') {
+          watchdog('syn_aduro_sync', 'insert error');
+        }
+        break;
+        
+      case 'delete':
+        break;
+    }
+  }
+}
+
+/**
+ * Get qualification_code of a course
+ */
+function syn_aduro_sync_course_qualitification_code($cousre) {
+  $field = field_get_items('course', $cousre, 'field_qualification');
+  $entity = array_shift(entity_load('qualification', array($field[0]['target_id'])));
+  $field_code = field_get_items('qualification', $entity, 'field_qualification_code');
+  
+  return $field_code[0]['value'];
+}
+
+/**
+ * Get status of a course
+ */
+function syn_aduro_sync_course_completed($og_membership) {
+  $field = field_get_items('og_membership', $og_membership, 'field_completed');
+  $view = field_view_value('og_membership', $og_membership, 'field_completed', $field[0]);
+  
+  return $view['#markup'];
+}
+
+/**
+ * Get enrol of a course
+ */
+function syn_aduro_sync_course_enroldate($og_membership) {
+  $enroldate = date('Y-m-d\TH:i:sO', $og_membership->created);
+  
+  return $enroldate;
+}
+
+/**
+ * Get state of a course
+ */
+function syn_aduro_sync_course_status($og_membership) {
+  $status = array(
+    OG_STATE_ACTIVE => 'Active',
+    OG_STATE_BLOCKED => 'Blocked',
+    OG_STATE_PENDING => 'Pending'
+  );
+  
+  if (in_array($og_membership->state, array_keys($status))) {
+    return $status[$og_membership->state];
+  }
+  
+  return null;
+}
+
+/**
+ * Curl post
+ */
+function syn_aduro_sync_push($url, $data) {
+  $data_string = json_encode($data);                                                                                   
+   
+  $ch = curl_init($url);                                                                      
+  curl_setopt($ch, CURLOPT_CUSTOMREQUEST, "POST");                                                                     
+  curl_setopt($ch, CURLOPT_POSTFIELDS, $data_string);                                                                  
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);                                                                      
+  curl_setopt($ch, CURLOPT_HTTPHEADER, array(                                                                          
+      'Content-Type: application/json')                                                                       
+  );                                                                                                                   
+   
+  return curl_exec($ch);
+}

@@ -1,0 +1,6 @@
+name = Syn Aduro sync
+description = This module sync lms course to salesforce
+core = 7.x
+package = Syn Aduro
+php = 5.2.4
+version = 7.x-1.5
